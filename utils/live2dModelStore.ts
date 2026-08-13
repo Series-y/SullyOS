@@ -3,6 +3,7 @@ import type { CharacterProfile } from '../types';
 import { DB } from './db';
 import { live2DRuntimeCacheAssetId, type Live2DTextureQuality } from './avatarModelStore';
 import { isBuiltinSullyLive2D } from './builtinSullyLive2D';
+import { detectMoc3Version, ensureLive2DCubismCore } from './live2dCore';
 
 export type Live2DAvatarConfig = Extract<NonNullable<CharacterProfile['videoAvatar']>, { format: 'live2d' }>;
 export type Live2DAction = Live2DAvatarConfig['actions'][number];
@@ -1572,6 +1573,19 @@ export const loadLive2DModelSource = async (
   };
 
   try {
+    // Detect moc3 version before converting to object URL so we can load
+    // the matching Cubism Core (v5 = Core 5.1, v6 = Core 06/Cubism 5.3).
+    if (refs.Moc) {
+      try {
+        const { blob: mocBlob } = resolveBlob(refs.Moc);
+        const mocVersion = await detectMoc3Version(mocBlob);
+        if (mocVersion !== null) {
+          await ensureLive2DCubismCore(mocVersion);
+        }
+      } catch {
+        // Version detection failure is non-fatal; Core will load with default.
+      }
+    }
     refs.Moc = toObjectUrl(refs.Moc);
     const textureStartedAt = nowMs();
     refs.Textures = await Promise.all((refs.Textures || []).map(texture => toTextureUrl(texture)));
