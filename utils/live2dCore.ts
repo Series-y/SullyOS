@@ -1,7 +1,6 @@
-// Cubism 5.3 exports moc3 file version 6. The legacy hosting URL currently
-// serves Core 5.1 (latest moc3 version 5), which rejects those models.
-const OFFICIAL_CUBISM_CORE = 'https://cubism.live2d.com/sdk-web/core/06/live2dcubismcore.min.js';
-const REQUIRED_MOC_VERSION = 6;
+// Using Core 5.1 for moc3 v5 model compatibility.
+const OFFICIAL_CUBISM_CORE = 'https://cubism.live2d.com/sdk-web/core/live2dcubismcore.min.js';
+const REQUIRED_MOC_VERSION = 5;
 
 type CubismCoreGlobal = {
   Version?: {
