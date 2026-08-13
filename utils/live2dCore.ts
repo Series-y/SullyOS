@@ -1,6 +1,8 @@
-// Using Core 5.1 for moc3 v5 model compatibility.
-const OFFICIAL_CUBISM_CORE = 'https://cubism.live2d.com/sdk-web/core/live2dcubismcore.min.js';
-const REQUIRED_MOC_VERSION = 5;
+// Adaptive Cubism Core loader.
+// Reads the moc3 file header to detect version (v5 = Cubism 5.1, v6 = Cubism 5.3)
+// and loads the matching Core automatically, so any model version works.
+const CUBISM_CORE_V5 = 'https://cubism.live2d.com/sdk-web/core/live2dcubismcore.min.js';
+const CUBISM_CORE_V6 = 'https://cubism.live2d.com/sdk-web/core/06/live2dcubismcore.min.js';
 
 type CubismCoreGlobal = {
   Version?: {
@@ -10,6 +12,9 @@ type CubismCoreGlobal = {
 
 let corePromise: Promise<void> | null = null;
 let runtimePromise: Promise<typeof import('untitled-pixi-live2d-engine/cubism')> | null = null;
+
+// Track which Core version is currently loaded so we can reload if needed.
+let loadedCoreVersion: number | null = null;
 
 const getCore = (): CubismCoreGlobal | undefined =>
   (window as Window & { Live2DCubismCore?: CubismCoreGlobal }).Live2DCubismCore;
@@ -23,9 +28,34 @@ const getLatestMocVersion = (): number | null => {
   }
 };
 
-const hasCompatibleCore = (): boolean => (getLatestMocVersion() ?? 0) >= REQUIRED_MOC_VERSION;
-// Keep existing loader call sites strict: an older Core is not considered loaded.
-const hasCore = hasCompatibleCore;
+const hasCore = (): boolean => (getLatestMocVersion() ?? 0) >= 5;
+
+/**
+ * Peek at the moc3 file's 5th byte to determine its version.
+ * moc3 format: bytes 0-3 = "MOC3", byte 4 = version (5 = SDK5.1, 6 = SDK5.3).
+ * Returns null if the file cannot be read or is not a valid moc3.
+ */
+export const detectMoc3Version = async (file: File | Blob): Promise<number | null> => {
+  try {
+    const header = await file.slice(0, 8).arrayBuffer();
+    const bytes = new Uint8Array(header);
+    // Check magic bytes "MOC3"
+    if (bytes[0] !== 0x4D || bytes[1] !== 0x4F || bytes[2] !== 0x43 || bytes[3] !== 0x33) {
+      return null;
+    }
+    const version = bytes[4];
+    return version >= 3 && version <= 10 ? version : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Pick the right Core URL for a given moc3 version.
+ * v6+ needs Core 06 (Cubism 5.3); v5 and below use Core 5.1.
+ */
+const coreUrlForMocVersion = (mocVersion: number): string =>
+  mocVersion >= 6 ? CUBISM_CORE_V6 : CUBISM_CORE_V5;
 
 const loadScript = (src: string): Promise<void> => new Promise((resolve, reject) => {
   const existing = document.querySelector<HTMLScriptElement>(`script[data-live2d-core="${src}"]`);
@@ -58,24 +88,46 @@ const findLocalCore = async (): Promise<string | null> => {
 };
 
 /** Load the proprietary Cubism Core without bundling or redistributing it. */
-export const ensureLive2DCubismCore = (): Promise<void> => {
+export const ensureLive2DCubismCore = (requiredMocVersion = 5): Promise<void> => {
   if (typeof window === 'undefined') return Promise.reject(new Error('Live2D 只能在浏览器中运行。'));
-  if (hasCore()) return Promise.resolve();
+
+  // If a compatible Core is already loaded for this moc version, reuse it.
+  const currentMax = getLatestMocVersion() ?? 0;
+  if (hasCore() && currentMax >= requiredMocVersion) return Promise.resolve();
+
+  // If a different version needs loading, reset so we reload the right Core.
+  if (corePromise && loadedCoreVersion !== null && loadedCoreVersion < requiredMocVersion) {
+    corePromise = null;
+  }
+
   if (corePromise) return corePromise;
+
+  const targetUrl = coreUrlForMocVersion(requiredMocVersion);
+
   corePromise = (async () => {
+    // Local vendor file takes priority regardless of version.
     const local = await findLocalCore();
     if (local) {
       try {
         await loadScript(local);
+        loadedCoreVersion = getLatestMocVersion();
         return;
       } catch {
-        // A stale/corrupt local file should not prevent the official fallback.
+        // Stale/corrupt local file — fall through to CDN.
       }
     }
     try {
-      await loadScript(OFFICIAL_CUBISM_CORE);
+      await loadScript(targetUrl);
+      loadedCoreVersion = requiredMocVersion;
     } catch {
-      throw new Error('Cubism Core 加载失败。请联网重试，或将官方 live2dcubismcore.min.js 放进 public/vendor/。');
+      // If the version-specific CDN fails, try the other one as fallback.
+      const fallbackUrl = requiredMocVersion >= 6 ? CUBISM_CORE_V5 : CUBISM_CORE_V6;
+      try {
+        await loadScript(fallbackUrl);
+        loadedCoreVersion = requiredMocVersion >= 6 ? 5 : 6;
+      } catch {
+        throw new Error('Cubism Core 加载失败。请联网重试，或将官方 live2dcubismcore.min.js 放进 public/vendor/。');
+      }
     }
   })().catch(error => {
     corePromise = null;
